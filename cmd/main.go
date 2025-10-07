@@ -5,6 +5,7 @@ import (
 	"os"
 	"site-mirror/internal/downloader"
 	"site-mirror/internal/parser"
+	"site-mirror/internal/storage"
 )
 
 func outErrAndExit(err error) {
@@ -30,17 +31,8 @@ func main() {
 	fmt.Printf("Content-Type: %s\n", ctype)
 	fmt.Printf("Content-Length: %d\n", len(body))
 
-	f, err := os.Create("index.html")
-	if err != nil {
-		outErrAndExit(err)
-	}
-	defer func(f *os.File) {
-		err = f.Close()
-		if err != nil {
-
-		}
-	}(f)
-	_, err = f.Write(body)
+	st := storage.NewStorage(cfg.OutputDir)
+	err = st.Save(cfg.StartURL, body, ctype)
 	if err != nil {
 		outErrAndExit(err)
 	}

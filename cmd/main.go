@@ -36,4 +36,12 @@ func main() {
 	if err != nil {
 		outErrAndExit(err)
 	}
+
+	pars := parser.NewParser()
+	pages, links, err := pars.ParseHTML(body, cfg.StartURL)
+	if err != nil {
+		outErrAndExit(err)
+	}
+	fmt.Printf("Found %d pages: %v\n", len(pages), pages)
+	fmt.Printf("Found %d links: %v\n", len(links), links)
 }

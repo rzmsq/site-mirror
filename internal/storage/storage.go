@@ -1,11 +1,14 @@
 package storage
 
 import (
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 )
+
+var charLoad = 92
 
 type Storage struct {
 	BaseDir string
@@ -38,6 +41,7 @@ func (s *Storage) Save(u *url.URL, content []byte, contentType string) error {
 		return err
 	}
 
+	fmt.Printf("Saving %s to %s\n", path, localPath)
 	return os.WriteFile(localPath, content, 0644)
 }
 

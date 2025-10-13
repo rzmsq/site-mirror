@@ -20,10 +20,11 @@ type Task struct {
 }
 
 type Queue struct {
-	tasks   chan Task
-	visited map[string]bool
-	mu      sync.Mutex
-	domain  string
+	tasks       chan Task
+	visited     map[string]bool
+	mu          sync.Mutex
+	activeTasks sync.WaitGroup
+	domain      string
 }
 
 func NewQueue(capacity int, domain string) *Queue {
@@ -35,7 +36,6 @@ func NewQueue(capacity int, domain string) *Queue {
 }
 
 func (q *Queue) Enqueue(t Task, maxDepth int) error {
-	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	if t.URL.Host != q.domain {
@@ -46,6 +46,7 @@ func (q *Queue) Enqueue(t Task, maxDepth int) error {
 		return ErrDepthLimit
 	}
 
+	q.mu.Lock()
 	urlStr := t.URL.String()
 	if _, exists := q.visited[urlStr]; exists {
 		return ErrURLisVisited
@@ -55,6 +56,7 @@ func (q *Queue) Enqueue(t Task, maxDepth int) error {
 
 	select {
 	case q.tasks <- t:
+		q.activeTasks.Add(1)
 		return nil
 	default:
 		return ErrQueueFull
@@ -65,6 +67,13 @@ func (q *Queue) Dequeue() <-chan Task {
 	return q.tasks
 }
 
+func (q *Queue) Done() {
+	q.activeTasks.Done()
+}
+func (q *Queue) WaitAndClose() {
+	q.activeTasks.Wait()
+	q.Close()
+}
 func (q *Queue) Close() {
 	q.mu.Lock()
 	defer q.mu.Unlock()

@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-const maxAttempts = 1
+const maxAttempts = 3
 
 type Downloader struct {
 	Client *http.Client
@@ -28,6 +28,7 @@ func (d *Downloader) Download(u *url.URL) ([]byte, string, error) {
 
 	attempts := 0
 	for attempts < maxAttempts {
+		fmt.Printf("Downloading %s, attempt: %d\n", u.String(), attempts)
 		resp, err = d.Client.Get(u.String())
 		if err != nil {
 			attempts++
@@ -49,10 +50,8 @@ func (d *Downloader) Download(u *url.URL) ([]byte, string, error) {
 	}
 
 	if err != nil || resp != nil && resp.StatusCode != http.StatusOK {
-		if resp != nil {
-			return nil, "", fmt.Errorf("failed after %d attempts, last status: %d", attempts, resp.StatusCode)
-		}
-		return nil, "", err
+		fmt.Printf("Can't download %s after attempt: %d, last status: %d\n", u.String(), attempts, resp.StatusCode)
+		return nil, "", nil
 	}
 
 	respBody, err := io.ReadAll(resp.Body)

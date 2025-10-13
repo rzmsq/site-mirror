@@ -3,9 +3,12 @@ package main
 import (
 	"fmt"
 	"os"
+	"site-mirror/internal/config"
 	"site-mirror/internal/downloader"
 	"site-mirror/internal/parser"
+	"site-mirror/internal/queue"
 	"site-mirror/internal/storage"
+	"sync"
 )
 
 func outErrAndExit(err error) {
@@ -22,26 +25,61 @@ func main() {
 		outErrAndExit(err)
 	}
 
+	q := queue.NewQueue(1000, cfg.StartURL.Host)
 	dwnld := downloader.NewDownloader()
-	body, ctype, err := dwnld.Download(cfg.StartURL)
-	if err != nil {
-		outErrAndExit(err)
-	}
-
-	fmt.Printf("Content-Type: %s\n", ctype)
-	fmt.Printf("Content-Length: %d\n", len(body))
-
 	st := storage.NewStorage(cfg.OutputDir)
-	err = st.Save(cfg.StartURL, body, ctype)
+	pars := parser.NewParser()
+
+	wg := &sync.WaitGroup{}
+	wg.Add(cfg.Concurrency)
+	for i := range cfg.Concurrency {
+		go runWorker(i, q, pars, dwnld, st, cfg, wg)
+	}
+
+	initTask := queue.Task{URL: cfg.StartURL, Depth: 0, Type: "page"}
+	err = q.Enqueue(initTask, cfg.Depth)
 	if err != nil {
 		outErrAndExit(err)
 	}
 
-	pars := parser.NewParser()
-	pages, links, err := pars.ParseHTML(body, cfg.StartURL)
-	if err != nil {
-		outErrAndExit(err)
+	fmt.Println("Processing...")
+	q.WaitAndClose()
+	fmt.Println("Done")
+}
+
+func runWorker(i int, q *queue.Queue, pars *parser.Parser, dwnld *downloader.Downloader, st *storage.Storage, cfg *config.Config, wg *sync.WaitGroup) {
+	defer wg.Done()
+	for task := range q.Dequeue() {
+		body, ctype, err := dwnld.Download(task.URL)
+		if err != nil {
+			outErrAndExit(err)
+		}
+
+		err = st.Save(task.URL, body, ctype)
+		if err != nil {
+			outErrAndExit(err)
+		}
+
+		if task.Depth < cfg.Depth {
+			pages, resources, errParser := pars.ParseHTML(body, task.URL)
+			if errParser != nil {
+				outErrAndExit(errParser)
+			}
+			for _, page := range pages {
+				newTask := queue.Task{URL: page, Depth: task.Depth + 1, Type: "page"}
+				err = q.Enqueue(newTask, cfg.Depth)
+				if err != nil {
+					continue
+				}
+			}
+			for _, resource := range resources {
+				newTask := queue.Task{URL: resource, Depth: task.Depth + 1, Type: "page"}
+				err = q.Enqueue(newTask, cfg.Depth)
+				if err != nil {
+					continue
+				}
+			}
+		}
+		q.Done()
 	}
-	fmt.Printf("Found %d pages: %v\n", len(pages), pages)
-	fmt.Printf("Found %d links: %v\n", len(links), links)
 }

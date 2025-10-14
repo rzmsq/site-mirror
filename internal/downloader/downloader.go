@@ -1,30 +1,51 @@
 package downloader
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"site-mirror/internal/robots"
 	"time"
+)
+
+var (
+	ErrTooManyAttempts          = errors.New("too many requests")
+	ErrDisallowed               = errors.New("disallowed")
+	ErrCouldNotCreateDownloader = errors.New("could not create downloader")
 )
 
 const maxAttempts = 3
 
 type Downloader struct {
-	Client *http.Client
+	Client    *http.Client
+	Robots    *robots.Robots
+	UserAgent string
 }
 
-func NewDownloader() *Downloader {
+func NewDownloader(u *url.URL, userAgent string) (*Downloader, error) {
+	r, err := robots.FetchRobots(u.Host)
+	if err != nil {
+		return nil, ErrCouldNotCreateDownloader
+	}
+
 	return &Downloader{
 		Client: &http.Client{
 			Timeout: time.Second * 30,
 		},
-	}
+		Robots:    r,
+		UserAgent: userAgent,
+	}, nil
 }
 
-func (d *Downloader) Download(u *url.URL) ([]byte, string, error) {
+func (d *Downloader) Download(u *url.URL, useRobots bool) ([]byte, string, error) {
 	var resp *http.Response
 	var err error
+
+	if useRobots && !d.Robots.IsAllowed(d.UserAgent, u) {
+		return nil, "", ErrDisallowed
+	}
 
 	attempts := 0
 	for attempts < maxAttempts {
@@ -49,9 +70,13 @@ func (d *Downloader) Download(u *url.URL) ([]byte, string, error) {
 		}
 	}
 
-	if err != nil || resp != nil && resp.StatusCode != http.StatusOK {
+	if resp != nil && resp.StatusCode != http.StatusOK {
 		fmt.Printf("Can't download %s after attempt: %d, last status: %d\n", u.String(), attempts, resp.StatusCode)
-		return nil, "", nil
+		return nil, "", ErrTooManyAttempts
+	}
+
+	if err != nil {
+		return nil, "", err
 	}
 
 	respBody, err := io.ReadAll(resp.Body)

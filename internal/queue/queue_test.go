@@ -25,6 +25,9 @@ func TestNewQueue(t *testing.T) {
 	if cap(q.tasks) != capacity {
 		t.Errorf("tasks channel capacity: got %d, want %d", cap(q.tasks), capacity)
 	}
+	if q.visited == nil {
+		t.Error("visited map is nil")
+	}
 }
 
 func TestEnqueue_ValidTask(t *testing.T) {
@@ -45,12 +48,13 @@ func TestEnqueue_ValidTask(t *testing.T) {
 		if received.URL.String() != task.URL.String() {
 			t.Errorf("received task URL: got %q, want %q", received.URL.String(), task.URL.String())
 		}
+		q.Done()
 	case <-time.After(100 * time.Millisecond):
 		t.Error("task was not added to channel")
 	}
 }
 
-func TestEnqueue_WrongDomain(t *testing.T) {
+func TestEnqueue_ExternalDomain(t *testing.T) {
 	t.Parallel()
 
 	q := NewQueue(10, "example.com")
@@ -70,7 +74,7 @@ func TestEnqueue_WrongDomain(t *testing.T) {
 	}
 }
 
-func TestEnqueue_MaxDepthExceeded(t *testing.T) {
+func TestEnqueue_DepthLimit(t *testing.T) {
 	t.Parallel()
 
 	q := NewQueue(10, "example.com")
@@ -98,7 +102,7 @@ func TestEnqueue_Duplicate(t *testing.T) {
 		t.Errorf("first Enqueue returned error: %v", err1)
 	}
 	if !errors.Is(err2, ErrURLisVisited) {
-		t.Errorf("expected errURLisVisited, got %v", err2)
+		t.Errorf("expected ErrURLisVisited, got %v", err2)
 	}
 }
 
@@ -121,7 +125,7 @@ func TestEnqueue_FullQueue(t *testing.T) {
 	err := q.Enqueue(task, 5)
 
 	if !errors.Is(err, ErrQueueFull) {
-		t.Errorf("expected errQueueFull, got %v", err)
+		t.Errorf("expected ErrQueueFull, got %v", err)
 	}
 }
 
@@ -132,20 +136,46 @@ func TestDequeue(t *testing.T) {
 	u, _ := url.Parse("https://example.com/page1")
 	task := Task{URL: u, Depth: 1, Type: "page"}
 
-	err := q.Enqueue(task, 5)
-	if err != nil {
-		return
+	if err := q.Enqueue(task, 5); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
 	}
 
 	ch := q.Dequeue()
-
 	select {
 	case received := <-ch:
 		if received.URL.String() != task.URL.String() {
 			t.Errorf("dequeued task: got %q, want %q", received.URL.String(), task.URL.String())
 		}
+		q.Done()
 	case <-time.After(100 * time.Millisecond):
 		t.Error("Dequeue timed out")
+	}
+}
+
+func TestDone(t *testing.T) {
+	t.Parallel()
+
+	q := NewQueue(10, "example.com")
+	u, _ := url.Parse("https://example.com/page1")
+	task := Task{URL: u, Depth: 1, Type: "page"}
+
+	if err := q.Enqueue(task, 5); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	<-q.tasks
+	q.Done()
+
+	done := make(chan bool)
+	go func() {
+		q.activeTasks.Wait()
+		done <- true
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(100 * time.Millisecond):
+		t.Error("Done did not decrement activeTasks counter")
 	}
 }
 
@@ -164,6 +194,38 @@ func TestClose(t *testing.T) {
 	}
 }
 
+func TestWaitAndClose(t *testing.T) {
+	q := NewQueue(10, "example.com")
+	u, _ := url.Parse("https://example.com/page1")
+	task := Task{URL: u, Depth: 1, Type: "page"}
+
+	if err := q.Enqueue(task, 5); err != nil {
+		t.Fatalf("Enqueue failed: %v", err)
+	}
+
+	go func() {
+		<-q.tasks
+		time.Sleep(50 * time.Millisecond)
+		q.Done()
+	}()
+
+	done := make(chan bool)
+	go func() {
+		q.WaitAndClose()
+		done <- true
+	}()
+
+	select {
+	case <-done:
+		_, ok := <-q.tasks
+		if ok {
+			t.Error("channel should be closed after WaitAndClose")
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Error("WaitAndClose did not complete in time")
+	}
+}
+
 func TestConcurrentEnqueue(t *testing.T) {
 	t.Parallel()
 
@@ -177,10 +239,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 			defer wg.Done()
 			u, _ := url.Parse("https://example.com/page" + string(rune('0'+i)))
 			task := Task{URL: u, Depth: 1, Type: "page"}
-			err := q.Enqueue(task, 5)
-			if err != nil {
-				return
-			}
+			_ = q.Enqueue(task, 5)
 		}(i)
 	}
 
@@ -193,6 +252,7 @@ func TestConcurrentEnqueue(t *testing.T) {
 		select {
 		case <-q.tasks:
 			count++
+			q.Done()
 		case <-timeout:
 			t.Fatalf("received %d tasks, expected %d", count, numGoroutines)
 		}
@@ -211,10 +271,7 @@ func TestVisited_ThreadSafety(t *testing.T) {
 			defer wg.Done()
 			u, _ := url.Parse("https://example.com/page1")
 			task := Task{URL: u, Depth: 1, Type: "page"}
-			err := q.Enqueue(task, 5)
-			if err != nil {
-				return
-			}
+			_ = q.Enqueue(task, 5)
 		}()
 	}
 
@@ -227,6 +284,7 @@ func TestVisited_ThreadSafety(t *testing.T) {
 		select {
 		case <-q.tasks:
 			count++
+			q.Done()
 		case <-timeout:
 			if count != 1 {
 				t.Errorf("expected exactly 1 task in queue, got %d", count)

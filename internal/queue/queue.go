@@ -36,8 +36,6 @@ func NewQueue(capacity int, domain string) *Queue {
 }
 
 func (q *Queue) Enqueue(t Task, maxDepth int) error {
-	defer q.mu.Unlock()
-
 	if t.URL.Host != q.domain {
 		return ErrExternalDomain
 	}
@@ -47,6 +45,8 @@ func (q *Queue) Enqueue(t Task, maxDepth int) error {
 	}
 
 	q.mu.Lock()
+	defer q.mu.Unlock()
+
 	urlStr := t.URL.String()
 	if _, exists := q.visited[urlStr]; exists {
 		return ErrURLisVisited
